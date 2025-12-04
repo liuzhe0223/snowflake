@@ -2,6 +2,7 @@
 package snowflake
 
 import (
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -27,10 +28,10 @@ var (
 	// DEPRECATED: the below four variables will be removed in a future release.
 	mu        sync.Mutex
 	nodeMax   int64 = -1 ^ (-1 << NodeBits)
-	nodeMask        = nodeMax << StepBits
+	nodeMask        = nodeMax << (41 + StepBits)
 	stepMask  int64 = -1 ^ (-1 << StepBits)
-	timeShift       = NodeBits + StepBits
-	nodeShift       = StepBits
+	timeShift       = StepBits
+	nodeShift       = 41 + StepBits
 )
 
 const encodeBase32Map = "ybndrfg8ejkmcpqxot1uwisza345h769"
@@ -57,7 +58,6 @@ var ErrInvalidBase32 = errors.New("invalid base32")
 // Create maps for decoding Base58/Base32.
 // This speeds up the process tremendously.
 func init() {
-
 	for i := 0; i < len(decodeBase58Map); i++ {
 		decodeBase58Map[i] = 0xFF
 	}
@@ -98,7 +98,6 @@ type ID int64
 // NewNode returns a new snowflake node that can be used to generate snowflake
 // IDs
 func NewNode(node int64) (*Node, error) {
-
 	if NodeBits+StepBits > 22 {
 		return nil, errors.New("Remember, you have a total 22 bits to share between Node/Step")
 	}
@@ -106,25 +105,25 @@ func NewNode(node int64) (*Node, error) {
 	// DEPRECATED: the below block will be removed in a future release.
 	mu.Lock()
 	nodeMax = -1 ^ (-1 << NodeBits)
-	nodeMask = nodeMax << StepBits
+	nodeMask = nodeMax << (41 + StepBits)
 	stepMask = -1 ^ (-1 << StepBits)
-	timeShift = NodeBits + StepBits
-	nodeShift = StepBits
+	timeShift = StepBits
+	nodeShift = 41 + StepBits
 	mu.Unlock()
 
 	n := Node{}
 	n.node = node
 	n.nodeMax = -1 ^ (-1 << NodeBits)
-	n.nodeMask = n.nodeMax << StepBits
+	n.nodeMask = n.nodeMax << (41 + StepBits)
 	n.stepMask = -1 ^ (-1 << StepBits)
-	n.timeShift = NodeBits + StepBits
-	n.nodeShift = StepBits
+	n.timeShift = StepBits
+	n.nodeShift = 41 + StepBits
 
 	if n.node < 0 || n.node > n.nodeMax {
 		return nil, errors.New("Node number must be between 0 and " + strconv.FormatInt(n.nodeMax, 10))
 	}
 
-	var curTime = time.Now()
+	curTime := time.Now()
 	// add time.Duration to curTime to make sure we use the monotonic clock if available
 	n.epoch = curTime.Add(time.Unix(Epoch/1000, (Epoch%1000)*1000000).Sub(curTime))
 
@@ -136,7 +135,6 @@ func NewNode(node int64) (*Node, error) {
 // - Make sure your system is keeping accurate system time
 // - Make sure you never have multiple nodes running with the same node ID
 func (n *Node) Generate() ID {
-
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -156,8 +154,8 @@ func (n *Node) Generate() ID {
 
 	n.time = now
 
-	r := ID((now)<<n.timeShift |
-		(n.node << n.nodeShift) |
+	r := ID((n.node << n.nodeShift) |
+		(now << n.timeShift) |
 		(n.step),
 	)
 
@@ -183,7 +181,6 @@ func (f ID) String() string {
 func ParseString(id string) (ID, error) {
 	i, err := strconv.ParseInt(id, 10, 64)
 	return ID(i), err
-
 }
 
 // Base2 returns a string base2 of the snowflake ID
@@ -202,7 +199,6 @@ func ParseBase2(id string) (ID, error) {
 // NOTE: There are many different base32 implementations so becareful when
 // doing any interoperation.
 func (f ID) Base32() string {
-
 	if f < 32 {
 		return string(encodeBase32Map[f])
 	}
@@ -225,7 +221,6 @@ func (f ID) Base32() string {
 // NOTE: There are many different base32 implementations so becareful when
 // doing any interoperation.
 func ParseBase32(b []byte) (ID, error) {
-
 	var id int64
 
 	for i := range b {
@@ -251,7 +246,6 @@ func ParseBase36(id string) (ID, error) {
 
 // Base58 returns a base58 string of the snowflake ID
 func (f ID) Base58() string {
-
 	if f < 58 {
 		return string(encodeBase58Map[f])
 	}
@@ -272,7 +266,6 @@ func (f ID) Base58() string {
 
 // ParseBase58 parses a base58 []byte into a snowflake ID
 func ParseBase58(b []byte) (ID, error) {
-
 	var id int64
 
 	for i := range b {
@@ -297,7 +290,6 @@ func ParseBase64(id string) (ID, error) {
 		return -1, err
 	}
 	return ParseBytes(b)
-
 }
 
 // Bytes returns a byte slice of the snowflake ID
@@ -328,7 +320,9 @@ func ParseIntBytes(id [8]byte) ID {
 // Time returns an int64 unix timestamp in milliseconds of the snowflake ID time
 // DEPRECATED: the below function will be removed in a future release.
 func (f ID) Time() int64 {
-	return (int64(f) >> timeShift) + Epoch
+	// timestamp is in the middle: shift right by StepBits, then mask 41 bits
+	timeMask := int64(-1 ^ (-1 << 41))
+	return ((int64(f) >> timeShift) & timeMask) + Epoch
 }
 
 // Node returns an int64 of the snowflake ID node number
@@ -364,5 +358,39 @@ func (f *ID) UnmarshalJSON(b []byte) error {
 	}
 
 	*f = ID(i)
+	return nil
+}
+
+// Value implements the driver.Valuer interface for database/sql.
+// This allows the ID to be used as a parameter in SQL queries.
+func (f ID) Value() (driver.Value, error) {
+	return int64(f), nil
+}
+
+// Scan implements the sql.Scanner interface for database/sql.
+// This allows the ID to be scanned from database query results.
+func (f *ID) Scan(src interface{}) error {
+	switch v := src.(type) {
+	case int64:
+		*f = ID(v)
+	case uint64:
+		*f = ID(v)
+	case []byte:
+		i, err := strconv.ParseInt(string(v), 10, 64)
+		if err != nil {
+			return err
+		}
+		*f = ID(i)
+	case string:
+		i, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return err
+		}
+		*f = ID(i)
+	case nil:
+		*f = ID(0)
+	default:
+		return fmt.Errorf("cannot scan type %T into snowflake.ID", src)
+	}
 	return nil
 }

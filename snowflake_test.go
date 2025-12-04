@@ -10,7 +10,6 @@ import (
 // General Test funcs
 
 func TestNewNode(t *testing.T) {
-
 	_, err := NewNode(0)
 	if err != nil {
 		t.Fatalf("error creating NewNode, %s", err)
@@ -20,13 +19,143 @@ func TestNewNode(t *testing.T) {
 	if err == nil {
 		t.Fatalf("no error creating NewNode, %s", err)
 	}
+}
 
+// TestIDFormat tests the new ID format:
+// +--------------------------------------------------------------------------+
+// | 1 Bit Unused | 10 Bit NodeID | 41 Bit Timestamp | 12 Bit Sequence ID     |
+// +--------------------------------------------------------------------------+
+func TestIDFormat(t *testing.T) {
+	node, err := NewNode(1)
+	if err != nil {
+		t.Fatalf("error creating NewNode, %s", err)
+	}
+
+	id := node.Generate()
+
+	// Verify Node() returns correct node ID
+	if id.Node() != 1 {
+		t.Errorf("Expected Node() to return 1, got %d", id.Node())
+	}
+
+	// Verify Step() returns 0 for first ID
+	if id.Step() != 0 {
+		t.Errorf("Expected Step() to return 0, got %d", id.Step())
+	}
+
+	// Verify Time() returns a reasonable timestamp
+	now := id.Time()
+	if now < Epoch {
+		t.Errorf("Expected Time() to be >= Epoch, got %d", now)
+	}
+
+	// Test with different node IDs
+	for nodeID := int64(0); nodeID <= 10; nodeID++ {
+		n, err := NewNode(nodeID)
+		if err != nil {
+			t.Fatalf("error creating NewNode with id %d: %s", nodeID, err)
+		}
+		id := n.Generate()
+		if id.Node() != nodeID {
+			t.Errorf("Expected Node() to return %d, got %d", nodeID, id.Node())
+		}
+	}
+
+	// Test max node ID (1023 for 10 bits)
+	maxNode, err := NewNode(1023)
+	if err != nil {
+		t.Fatalf("error creating NewNode with max id: %s", err)
+	}
+	maxID := maxNode.Generate()
+	if maxID.Node() != 1023 {
+		t.Errorf("Expected Node() to return 1023, got %d", maxID.Node())
+	}
+}
+
+// TestIDFormatBitLayout verifies the exact bit layout of the ID
+func TestIDFormatBitLayout(t *testing.T) {
+	// Create a known ID manually to verify bit positions
+	// Format: | 1 unused | 10 NodeID | 41 Timestamp | 12 Sequence |
+
+	// NodeID = 1, Timestamp = 1, Sequence = 1
+	// NodeID at bits 53-62 (shifted left by 53)
+	// Timestamp at bits 12-52 (shifted left by 12)
+	// Sequence at bits 0-11
+	nodeID := int64(1)
+	timestamp := int64(1)
+	sequence := int64(1)
+
+	expectedID := (nodeID << 53) | (timestamp << 12) | sequence
+	id := ID(expectedID)
+
+	if id.Node() != nodeID {
+		t.Errorf("Node mismatch: expected %d, got %d", nodeID, id.Node())
+	}
+
+	// For Time(), we need to add Epoch since Time() returns absolute time
+	expectedTime := timestamp + Epoch
+	if id.Time() != expectedTime {
+		t.Errorf("Time mismatch: expected %d, got %d", expectedTime, id.Time())
+	}
+
+	if id.Step() != sequence {
+		t.Errorf("Step mismatch: expected %d, got %d", sequence, id.Step())
+	}
+
+	// Test with max values
+	maxNodeID := int64(1023)             // 10 bits max
+	maxTimestamp := int64((1 << 41) - 1) // 41 bits max
+	maxSequence := int64(4095)           // 12 bits max
+
+	maxExpectedID := (maxNodeID << 53) | (maxTimestamp << 12) | maxSequence
+	maxID := ID(maxExpectedID)
+
+	if maxID.Node() != maxNodeID {
+		t.Errorf("Max Node mismatch: expected %d, got %d", maxNodeID, maxID.Node())
+	}
+
+	if maxID.Step() != maxSequence {
+		t.Errorf("Max Step mismatch: expected %d, got %d", maxSequence, maxID.Step())
+	}
+
+	// Time should be maxTimestamp + Epoch
+	expectedMaxTime := maxTimestamp + Epoch
+	if maxID.Time() != expectedMaxTime {
+		t.Errorf("Max Time mismatch: expected %d, got %d", expectedMaxTime, maxID.Time())
+	}
+}
+
+// TestSequenceIncrement verifies sequence increments correctly within same millisecond
+func TestSequenceIncrement(t *testing.T) {
+	node, err := NewNode(1)
+	if err != nil {
+		t.Fatalf("error creating NewNode: %s", err)
+	}
+
+	// Generate multiple IDs quickly to get same timestamp
+	var ids []ID
+	for i := 0; i < 100; i++ {
+		ids = append(ids, node.Generate())
+	}
+
+	// Verify all IDs have the same node
+	for i, id := range ids {
+		if id.Node() != 1 {
+			t.Errorf("ID %d: expected Node() = 1, got %d", i, id.Node())
+		}
+	}
+
+	// Verify IDs are strictly increasing
+	for i := 1; i < len(ids); i++ {
+		if ids[i] <= ids[i-1] {
+			t.Errorf("ID %d (%d) should be greater than ID %d (%d)", i, ids[i], i-1, ids[i-1])
+		}
+	}
 }
 
 // lazy check if Generate will create duplicate IDs
 // would be good to later enhance this with more smarts
 func TestGenerateDuplicateID(t *testing.T) {
-
 	node, _ := NewNode(1)
 
 	var x, y ID
@@ -41,21 +170,17 @@ func TestGenerateDuplicateID(t *testing.T) {
 
 // I feel like there's probably a better way
 func TestRace(t *testing.T) {
-
 	node, _ := NewNode(1)
 
 	go func() {
 		for i := 0; i < 1000000000; i++ {
-
 			NewNode(1)
 		}
 	}()
 
 	for i := 0; i < 4000; i++ {
-
 		node.Generate()
 	}
-
 }
 
 //******************************************************************************
@@ -79,7 +204,6 @@ func TestPrintAll(t *testing.T) {
 	t.Logf("Base64   : %#v", id.Base64())
 	t.Logf("Bytes    : %#v", id.Bytes())
 	t.Logf("IntBytes : %#v", id.IntBytes())
-
 }
 
 func TestInt64(t *testing.T) {
@@ -101,7 +225,6 @@ func TestInt64(t *testing.T) {
 	if pID.Int64() != mi {
 		t.Fatalf("pID %v != mi %v", pID.Int64(), mi)
 	}
-
 }
 
 func TestString(t *testing.T) {
@@ -166,7 +289,6 @@ func TestBase2(t *testing.T) {
 }
 
 func TestBase32(t *testing.T) {
-
 	node, err := NewNode(0)
 	if err != nil {
 		t.Fatalf("error creating NewNode, %s", err)
@@ -217,7 +339,6 @@ func TestBase36(t *testing.T) {
 }
 
 func TestBase58(t *testing.T) {
-
 	node, err := NewNode(0)
 	if err != nil {
 		t.Fatalf("error creating NewNode, %s", err)
@@ -317,7 +438,6 @@ func TestIntBytes(t *testing.T) {
 	if pID.Int64() != mi {
 		t.Fatalf("pID %v != mi %v", pID.Int64(), mi)
 	}
-
 }
 
 //******************************************************************************
@@ -373,7 +493,6 @@ func TestUnmarshalJSON(t *testing.T) {
 // Benchmark Methods
 
 func BenchmarkParseBase32(b *testing.B) {
-
 	node, _ := NewNode(1)
 	sf := node.Generate()
 	b32i := sf.Base32()
@@ -385,8 +504,8 @@ func BenchmarkParseBase32(b *testing.B) {
 		ParseBase32([]byte(b32i))
 	}
 }
-func BenchmarkBase32(b *testing.B) {
 
+func BenchmarkBase32(b *testing.B) {
 	node, _ := NewNode(1)
 	sf := node.Generate()
 
@@ -397,8 +516,8 @@ func BenchmarkBase32(b *testing.B) {
 		sf.Base32()
 	}
 }
-func BenchmarkParseBase58(b *testing.B) {
 
+func BenchmarkParseBase58(b *testing.B) {
 	node, _ := NewNode(1)
 	sf := node.Generate()
 	b58 := sf.Base58()
@@ -410,8 +529,8 @@ func BenchmarkParseBase58(b *testing.B) {
 		ParseBase58([]byte(b58))
 	}
 }
-func BenchmarkBase58(b *testing.B) {
 
+func BenchmarkBase58(b *testing.B) {
 	node, _ := NewNode(1)
 	sf := node.Generate()
 
@@ -422,8 +541,8 @@ func BenchmarkBase58(b *testing.B) {
 		sf.Base58()
 	}
 }
-func BenchmarkGenerate(b *testing.B) {
 
+func BenchmarkGenerate(b *testing.B) {
 	node, _ := NewNode(1)
 
 	b.ReportAllocs()
@@ -435,7 +554,6 @@ func BenchmarkGenerate(b *testing.B) {
 }
 
 func BenchmarkGenerateMaxSequence(b *testing.B) {
-
 	NodeBits = 1
 	StepBits = 21
 	node, _ := NewNode(1)
@@ -524,6 +642,106 @@ func TestParseBase32(t *testing.T) {
 				t.Errorf("ParseBase32() got = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+//******************************************************************************
+// SQL Scanner/Valuer Test Methods
+
+func TestSQLValue(t *testing.T) {
+	node, err := NewNode(0)
+	if err != nil {
+		t.Fatalf("error creating NewNode, %s", err)
+	}
+
+	id := node.Generate()
+	val, err := id.Value()
+	if err != nil {
+		t.Fatalf("error getting Value, %s", err)
+	}
+
+	if val != id.Int64() {
+		t.Fatalf("Value %v != id.Int64() %v", val, id.Int64())
+	}
+}
+
+func TestSQLScan(t *testing.T) {
+	node, err := NewNode(0)
+	if err != nil {
+		t.Fatalf("error creating NewNode, %s", err)
+	}
+
+	oID := node.Generate()
+
+	// Test scanning from int64
+	var id1 ID
+	err = id1.Scan(oID.Int64())
+	if err != nil {
+		t.Fatalf("error scanning int64, %s", err)
+	}
+	if id1 != oID {
+		t.Fatalf("id1 %v != oID %v", id1, oID)
+	}
+
+	// Test scanning from uint64
+	var id2 ID
+	err = id2.Scan(uint64(oID.Int64()))
+	if err != nil {
+		t.Fatalf("error scanning uint64, %s", err)
+	}
+	if id2 != oID {
+		t.Fatalf("id2 %v != oID %v", id2, oID)
+	}
+
+	// Test scanning from []byte
+	var id3 ID
+	err = id3.Scan([]byte(oID.String()))
+	if err != nil {
+		t.Fatalf("error scanning []byte, %s", err)
+	}
+	if id3 != oID {
+		t.Fatalf("id3 %v != oID %v", id3, oID)
+	}
+
+	// Test scanning from string
+	var id4 ID
+	err = id4.Scan(oID.String())
+	if err != nil {
+		t.Fatalf("error scanning string, %s", err)
+	}
+	if id4 != oID {
+		t.Fatalf("id4 %v != oID %v", id4, oID)
+	}
+
+	// Test scanning from nil
+	var id5 ID
+	err = id5.Scan(nil)
+	if err != nil {
+		t.Fatalf("error scanning nil, %s", err)
+	}
+	if id5 != 0 {
+		t.Fatalf("id5 %v != 0", id5)
+	}
+
+	// Test scanning from unsupported type
+	var id6 ID
+	err = id6.Scan(float64(123.456))
+	if err == nil {
+		t.Fatalf("expected error scanning float64, got nil")
+	}
+
+	// Test scanning from invalid []byte
+	var id7 ID
+	err = id7.Scan([]byte("invalid"))
+	if err == nil {
+		t.Fatalf("expected error scanning invalid []byte, got nil")
+	}
+
+	// Test scanning from invalid string
+	var id8 ID
+	err = id8.Scan("invalid")
+	if err == nil {
+		t.Fatalf("expected error scanning invalid string, got nil")
 	}
 }
 

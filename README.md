@@ -41,14 +41,14 @@ custom values you set will not be applied correctly.
 
 ### How it Works.
 Each time you generate an ID, it works, like this.
+* The NodeID is stored in the highest bits (after the unused sign bit).
 * A timestamp with millisecond precision is stored using 41 bits of the ID.
-* Then the NodeID is added in subsequent bits.
 * Then the Sequence Number is added, starting at 0 and incrementing for each ID generated in the same millisecond. If you generate enough IDs in the same millisecond that the sequence would roll over or overfill then the generate function will pause until the next millisecond.
 
-The default Twitter format shown below.
+The ID format shown below.
 ```
 +--------------------------------------------------------------------------+
-| 1 Bit Unused | 41 Bit Timestamp |  10 Bit NodeID  |   12 Bit Sequence ID |
+| 1 Bit Unused |  10 Bit NodeID  | 41 Bit Timestamp |   12 Bit Sequence ID |
 +--------------------------------------------------------------------------+
 ```
 
